@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File .\build.ps1
+
+      - name: Package
+        shell: powershell
+        run: Compress-Archive -Path .\build\* -DestinationPath .\MabaoClone.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MabaoClone
+          path: MabaoClone.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MabaoClone.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,23 @@
+# 构建产物
+build/
+dist/
+lib/
+
+# 运行时文件（不应提交）
+mabao.ini
+crash.log
+debug.log
+hotkey.log
+debug.flag
+
+# 编译中间产物
+*.obj
+*.pdb
+bin/
+obj/
+
+# 系统/编辑器
+Thumbs.db
+desktop.ini
+.vs/
+.vscode/
