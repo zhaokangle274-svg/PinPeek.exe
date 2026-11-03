@@ -1,5 +1,11 @@
 # PinPeek 钉窗
 
+[![Release](https://img.shields.io/github/v/release/zhaokangle274-svg/PinPeek.exe)](https://github.com/zhaokangle274-svg/PinPeek.exe/releases)
+[![License](https://img.shields.io/github/license/zhaokangle274-svg/PinPeek.exe)](LICENSE)
+[![Build](https://github.com/zhaokangle274-svg/PinPeek.exe/actions/workflows/build.yml/badge.svg)](https://github.com/zhaokangle274-svg/PinPeek.exe/actions)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)](#)
+[![Size](https://img.shields.io/badge/main%20exe-50%20KB-brightgreen)](#)
+
 一个 **置顶小窗浏览器**：把网页（B站、抖音、米游社、任何网站）固定在最前面，边打游戏边看攻略视频；支持**全局热键**（暂停 / 快退 / 快进），在独占全屏的游戏里也能用。
 
 - **50 KB** 主程序 + 系统自带 WebView2 运行时（不是 Electron，不打包浏览器内核）
