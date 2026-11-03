@@ -1,5 +1,5 @@
 ﻿<#
-    MabaoClone 一键编译脚本
+    PinPeek 一键编译脚本
     依赖：Windows 自带的 .NET Framework 4.8（csc.exe）+ 首次联网拉取 WebView2 SDK
     用法：powershell -ExecutionPolicy Bypass -File .\build.ps1
 #>
@@ -54,7 +54,7 @@ Write-Step "编译 src\Program.cs"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $cscArgs = @(
     '/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/codepage:65001',
-    "/out:$outDir\MabaoClone.exe",
+    "/out:$outDir\PinPeek.exe",
     "/win32manifest:$root\src\app.manifest",
     "/win32icon:$root\src\icon.ico",
     "/r:$netDir\Microsoft.Web.WebView2.Core.dll",

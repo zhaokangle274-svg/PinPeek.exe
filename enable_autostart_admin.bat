@@ -10,18 +10,18 @@ if not %errorlevel%==0 (
     exit /b
 )
 
-set EXE=%~dp0MabaoClone.exe
+set EXE=%~dp0PinPeek.exe
 if not exist "%EXE%" (
-    echo [ERROR] MabaoClone.exe not found next to this script.
+    echo [ERROR] PinPeek.exe not found next to this script.
     pause
     exit /b 1
 )
 
-echo Creating logon task "MabaoClone" (run with highest privileges, no UAC prompt)...
-schtasks /create /tn "MabaoClone" /tr "\"%EXE%\"" /sc onlogon /rl highest /f
+echo Creating logon task "PinPeek" (run with highest privileges, no UAC prompt)...
+schtasks /create /tn "PinPeek" /tr "\"%EXE%\"" /sc onlogon /rl highest /f
 if %errorlevel%==0 (
     echo.
-    echo [OK] Task created. MabaoClone will start automatically at next logon
+    echo [OK] Task created. PinPeek will start automatically at next logon
     echo      with administrator rights and WITHOUT a UAC prompt.
     echo.
     echo      To remove it later, run:  disable_autostart_admin.bat
@@ -29,7 +29,7 @@ if %errorlevel%==0 (
     echo.
     echo [FAILED] schtasks returned %errorlevel%
     echo Manual command:
-    echo   schtasks /create /tn "MabaoClone" /tr "\"%EXE%\"" /sc onlogon /rl highest /f
+    echo   schtasks /create /tn "PinPeek" /tr "\"%EXE%\"" /sc onlogon /rl highest /f
 )
 echo.
 pause

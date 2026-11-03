@@ -1,4 +1,4 @@
-// MabaoClone v2 —— 仿「妈宝」的置顶小窗浏览器（自主实现）
+// PinPeek —— 置顶小窗浏览器：边玩游戏边看攻略视频，全局热键控制播放
 // 特点：超薄工具栏 / 无地址栏（可切换）/ 支持缩放 / 可拖边缩放 / 不下载页面 / 无壳无管理员无限制
 // 编译：见 build.ps1（.NET Framework 4.8 自带 csc + WebView2 SDK）
 
@@ -13,7 +13,7 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-namespace MabaoClone
+namespace PinPeek
 {
     internal class Config
     {
@@ -103,7 +103,7 @@ namespace MabaoClone
             try
             {
                 StringBuilder sb = new StringBuilder();
-                sb.AppendLine("; MabaoClone 配置（可手工编辑；删掉本文件即恢复默认）");
+                sb.AppendLine("; PinPeek 配置（可手工编辑；删掉本文件即恢复默认）");
                 sb.AppendLine("[set]");
                 sb.AppendLine("url=" + Url);
                 sb.AppendLine("x=" + X);
@@ -322,7 +322,7 @@ namespace MabaoClone
         // ---------- 界面 ----------
         private void BuildUi()
         {
-            Text = "MabaoClone";
+            Text = "PinPeek";
             BackColor = Color.FromArgb(20, 20, 24);
             StartPosition = FormStartPosition.Manual;
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
@@ -396,7 +396,7 @@ namespace MabaoClone
 
             tray = new NotifyIcon();
             tray.Icon = SystemIcons.Application;
-            tray.Text = "MabaoClone 置顶小窗";
+            tray.Text = "PinPeek 置顶小窗";
             tray.Visible = true;
             ContextMenuStrip tm = new ContextMenuStrip();
             tm.Items.Add("显示/隐藏", null, delegate { ToggleVisible(); });
@@ -553,7 +553,7 @@ namespace MabaoClone
         {
             try
             {
-                string udf = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MabaoClone", "EBWebView");
+                string udf = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PinPeek", "EBWebView");
                 Directory.CreateDirectory(udf);
                 CoreWebView2EnvironmentOptions opt = new CoreWebView2EnvironmentOptions();
                 bool debugMode = File.Exists(Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "debug.flag"));
@@ -641,7 +641,7 @@ namespace MabaoClone
             {
                 SetStatus("WebView2 初始化失败：" + ex.Message);
                 MessageBox.Show("WebView2 运行时初始化失败：\n" + ex.Message +
-                    "\n\n请确认已安装 Microsoft Edge WebView2 Runtime（Win10/11 一般自带）。", "MabaoClone");
+                    "\n\n请确认已安装 Microsoft Edge WebView2 Runtime（Win10/11 一般自带）。", "PinPeek");
             }
         }
 
@@ -825,7 +825,7 @@ namespace MabaoClone
                 "【常用键】\n" +
                 "  F5 刷新    Alt+←/→ 前进后退    Ctrl+L 地址栏\n" +
                 "  F11 全屏    Ctrl+Shift+Q 退出";
-            MessageBox.Show(msg, "MabaoClone 使用说明", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(msg, "PinPeek 使用说明", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private string KeyText(int action)
@@ -846,8 +846,8 @@ namespace MabaoClone
         {
             try
             {
-                string f = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MabaoClone", "hotkey.log");
-                if (!File.Exists(f)) { MessageBox.Show("还没有日志。先按几下热键再来看。", "MabaoClone"); return; }
+                string f = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PinPeek", "hotkey.log");
+                if (!File.Exists(f)) { MessageBox.Show("还没有日志。先按几下热键再来看。", "PinPeek"); return; }
                 System.Diagnostics.Process.Start("notepad.exe", f);
             }
             catch (Exception ex) { MessageBox.Show(ex.Message); }
@@ -870,7 +870,7 @@ namespace MabaoClone
             }
             catch (Exception ex)
             {
-                MessageBox.Show("提权重启被取消或失败：" + ex.Message, "MabaoClone");
+                MessageBox.Show("提权重启被取消或失败：" + ex.Message, "PinPeek");
             }
         }
 
@@ -880,7 +880,7 @@ namespace MabaoClone
             try
             {
                 string exe = Application.ExecutablePath;
-                string args = "/create /tn \"MabaoClone\" /tr \"\\\"" + exe + "\\\"\" /sc onlogon /rl highest /f";
+                string args = "/create /tn \"PinPeek\" /tr \"\\\"" + exe + "\\\"\" /sc onlogon /rl highest /f";
                 System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo("schtasks.exe", args);
                 psi.UseShellExecute = true;
                 psi.WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden;
@@ -889,16 +889,16 @@ namespace MabaoClone
                 p.WaitForExit(8000);
                 if (p.ExitCode == 0)
                     MessageBox.Show("已创建开机自启任务（管理员权限，登录时自动运行，不弹 UAC）。\n\n" +
-                        "想取消：任务计划程序里删除名为 MabaoClone 的任务，或命令行执行\n" +
-                        "schtasks /delete /tn MabaoClone /f", "MabaoClone",
+                        "想取消：任务计划程序里删除名为 PinPeek 的任务，或命令行执行\n" +
+                        "schtasks /delete /tn PinPeek /f", "PinPeek",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                 else
                     MessageBox.Show("创建计划任务失败（退出码 " + p.ExitCode + "）。\n可以手动运行：\nschtasks " + args,
-                        "MabaoClone", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             catch (Exception ex)
             {
-                MessageBox.Show("创建计划任务出错：" + ex.Message, "MabaoClone");
+                MessageBox.Show("创建计划任务出错：" + ex.Message, "PinPeek");
             }
         }
 
@@ -1214,7 +1214,7 @@ namespace MabaoClone
             else cfg.ForwardHotkey = target.Combo;
             RegisterAll(false);
             SaveState();
-            MessageBox.Show(target.Label + " 热键已改为：" + target.Combo, "MabaoClone",
+            MessageBox.Show(target.Label + " 热键已改为：" + target.Combo, "PinPeek",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
@@ -1236,12 +1236,12 @@ namespace MabaoClone
             catch { }
         }
 
-        // 常驻诊断日志（很小，写到 %LOCALAPPDATA%\MabaoClone\hotkey.log，超过 100KB 自动清空）
+        // 常驻诊断日志（很小，写到 %LOCALAPPDATA%\PinPeek\hotkey.log，超过 100KB 自动清空）
         private void LogLine(string s)
         {
             try
             {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MabaoClone");
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PinPeek");
                 Directory.CreateDirectory(dir);
                 string f = Path.Combine(dir, "hotkey.log");
                 if (File.Exists(f) && new FileInfo(f).Length > 100 * 1024) File.Delete(f);
@@ -1347,14 +1347,14 @@ namespace MabaoClone
                         DateTime.Now.ToString("s") + "  " + ex + "\r\n\r\n", Encoding.UTF8);
                 }
                 catch { }
-                MessageBox.Show("启动失败：\n" + ex.Message, "MabaoClone", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("启动失败：\n" + ex.Message, "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private static void Run()
         {
             string dir = Path.GetDirectoryName(Application.ExecutablePath);
-            string cfgFile = Path.Combine(dir, "mabao.ini");
+            string cfgFile = Path.Combine(dir, "pinpeek.ini");
             Config cfg = Config.Load(cfgFile);
 
             // 自动提权：游戏（如原神）常以管理员身份运行，Windows 的 UIPI 规则会让
@@ -1372,11 +1372,11 @@ namespace MabaoClone
 
             // 单实例：避免多个窗口抢同一个热键，导致“有时灵有时不灵”
             bool created;
-            System.Threading.Mutex mutex = new System.Threading.Mutex(true, "MabaoClone.SingleInstance.v1", out created);
+            System.Threading.Mutex mutex = new System.Threading.Mutex(true, "PinPeek.SingleInstance.v1", out created);
             if (!created)
             {
-                MessageBox.Show("MabaoClone 已经在运行了。\n请到任务栏 / 托盘图标那里找回它，不要重复启动。",
-                    "MabaoClone", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("PinPeek 已经在运行了。\n请到任务栏 / 托盘图标那里找回它，不要重复启动。",
+                    "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             GC.KeepAlive(mutex);
@@ -1429,7 +1429,7 @@ namespace MabaoClone
         {
             try
             {
-                string d = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MabaoClone");
+                string d = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PinPeek");
                 Directory.CreateDirectory(d);
                 string f = Path.Combine(d, "hotkey.log");
                 if (File.Exists(f) && new FileInfo(f).Length > 100 * 1024) File.Delete(f);

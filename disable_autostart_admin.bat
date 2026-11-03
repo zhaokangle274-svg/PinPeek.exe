@@ -8,10 +8,10 @@ if not %errorlevel%==0 (
     exit /b
 )
 
-echo Removing task "MabaoClone"...
-schtasks /delete /tn "MabaoClone" /f
+echo Removing task "PinPeek"...
+schtasks /delete /tn "PinPeek" /f
 if %errorlevel%==0 (
-    echo [OK] Task removed. MabaoClone will no longer auto-start.
+    echo [OK] Task removed. PinPeek will no longer auto-start.
 ) else (
     echo [INFO] Nothing removed (task may not exist).
 )
