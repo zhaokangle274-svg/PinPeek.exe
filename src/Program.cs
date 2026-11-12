@@ -31,6 +31,8 @@ namespace PinPeek
         public string ForwardHotkey = "6";  // 快进
         public int SeekSeconds = 5;         // 每次快进/快退的秒数
         public bool AutoElevate = true;  // 启动时自动请求管理员权限（游戏是全屏/管理员时热键才收得到）
+        public bool SmartPass = true;    // 智能放行：单键热键只在全屏程序 / 白名单程序 / 自己窗口里才吃键
+        public List<string> HotkeyApps = new List<string>();   // 热键白名单（窗口化游戏用），存小写 exe 名
         public List<string[]> Bookmarks = new List<string[]>();
         private string path;
 
@@ -38,11 +40,8 @@ namespace PinPeek
         {
             Config c = new Config();
             c.path = p;
-            c.Bookmarks.Add(new string[] { "B站首页", "https://www.bilibili.com" });
-            c.Bookmarks.Add(new string[] { "B站搜索", "https://search.bilibili.com" });
-            c.Bookmarks.Add(new string[] { "米游社", "https://www.miyoushe.com" });
-            c.Bookmarks.Add(new string[] { "抖音", "https://www.douyin.com" });
-            if (!File.Exists(p)) return c;
+            // 默认收藏只在配置文件里没有 [bookmark] 时才补，避免每启动一次就重复叠加一批
+            if (!File.Exists(p)) { AddDefaultBookmarks(c); return c; }
             try
             {
                 string section = "";
@@ -62,7 +61,8 @@ namespace PinPeek
                     if (section == "bookmark")
                     {
                         string[] parts = v.Split('|');
-                        if (parts.Length >= 2) c.Bookmarks.Add(new string[] { parts[0], parts[1] });
+                        if (parts.Length >= 2 && !c.Bookmarks.Exists(x => x[0] == parts[0] && x[1] == parts[1]))
+                            c.Bookmarks.Add(new string[] { parts[0], parts[1] });
                         continue;
                     }
                     switch (k)
@@ -84,15 +84,33 @@ namespace PinPeek
                         case "forwardhotkey": c.ForwardHotkey = v; break;
                         case "seekseconds": c.SeekSeconds = Math.Max(1, Int(v, c.SeekSeconds)); break;
                         case "autoelevate": c.AutoElevate = B(v); break;
+                        case "smartpass": c.SmartPass = B(v); break;
+                        case "hotkeyapps":
+                            foreach (string one in v.Split(new char[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries))
+                            {
+                                string e = one.Trim().ToLowerInvariant();
+                                if (!e.EndsWith(".exe")) e += ".exe";
+                                if (!c.HotkeyApps.Contains(e)) c.HotkeyApps.Add(e);
+                            }
+                            break;
                     }
                 }
             }
             catch { }
+            if (c.Bookmarks.Count == 0) AddDefaultBookmarks(c);
             if (c.OpacityPercent < 30) c.OpacityPercent = 30;
             if (c.OpacityPercent > 100) c.OpacityPercent = 100;
             if (c.ZoomPercent < 30) c.ZoomPercent = 30;
             if (c.ZoomPercent > 300) c.ZoomPercent = 300;
             return c;
+        }
+
+        private static void AddDefaultBookmarks(Config c)
+        {
+            c.Bookmarks.Add(new string[] { "B站首页", "https://www.bilibili.com" });
+            c.Bookmarks.Add(new string[] { "B站搜索", "https://search.bilibili.com" });
+            c.Bookmarks.Add(new string[] { "米游社", "https://www.miyoushe.com" });
+            c.Bookmarks.Add(new string[] { "抖音", "https://www.douyin.com" });
         }
 
         private static int Int(string s, int d) { int r; return int.TryParse(s, out r) ? r : d; }
@@ -122,6 +140,8 @@ namespace PinPeek
                 sb.AppendLine("forwardhotkey=" + ForwardHotkey);
                 sb.AppendLine("seekseconds=" + SeekSeconds);
                 sb.AppendLine("autoelevate=" + (AutoElevate ? "1" : "0"));
+                sb.AppendLine("smartpass=" + (SmartPass ? "1" : "0"));
+                sb.AppendLine("hotkeyapps=" + string.Join(",", HotkeyApps.ToArray()));
                 sb.AppendLine();
                 sb.AppendLine("[bookmark]");
                 foreach (string[] b in Bookmarks) sb.AppendLine(b[0] + "=" + b[0] + "|" + b[1]);
@@ -307,7 +327,8 @@ namespace PinPeek
         private Button addrToggle;
         private Button pauseBtn;
         private int leftEdgeX = 4;
-        private bool reallyExit = false;
+        private bool exiting = false;            // 已经进入退出流程（防重入）
+        private bool resourcesDisposed = false;  // 钩子/热键/托盘/浏览器内核已释放
         private bool videoPaused = false;
 
         public MainForm(Config c, string cfgFile)
@@ -317,6 +338,17 @@ namespace PinPeek
             zoomPct = cfg.ZoomPercent;
             BuildUi();
             LoadPage();
+            if (Program.SelfTestExitSeconds > 0) StartSelfTestExit();
+        }
+
+        // 自检：到点自动走一遍真实退出流程（验证进程不会残留）
+        private void StartSelfTestExit()
+        {
+            LogLine("SELFTEST exit in " + Program.SelfTestExitSeconds + "s");
+            System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
+            t.Interval = Math.Max(1, Program.SelfTestExitSeconds) * 1000;
+            t.Tick += delegate { t.Stop(); t.Dispose(); RealExit(); };
+            t.Start();
         }
 
         // ---------- 界面 ----------
@@ -780,9 +812,13 @@ namespace PinPeek
             {
                 if (!ready) return;
                 string u = web.CoreWebView2.Source;
-                cfg.Bookmarks.Add(new string[] { u.Length > 30 ? u.Substring(0, 30) : u, u });
-                SaveState();
-                SetStatus("已收藏：" + u);
+                if (!cfg.Bookmarks.Exists(x => x[1] == u))
+                {
+                    cfg.Bookmarks.Add(new string[] { u.Length > 30 ? u.Substring(0, 30) : u, u });
+                    SaveState();
+                    SetStatus("已收藏：" + u);
+                }
+                else SetStatus("这个页面已经在收藏里了");
             });
             m.Items.Add(bm);
             m.Items.Add("在系统浏览器中打开当前页", null, delegate
@@ -798,8 +834,35 @@ namespace PinPeek
                 SaveState();
                 SetStatus("启动时自动提权：" + (cfg.AutoElevate ? "开（下次启动生效）" : "关"));
             });
+            m.Items.Add("单键热键智能放行（只在游戏/全屏时吃键）：" + (cfg.SmartPass ? "开" : "关"), null, delegate
+            {
+                cfg.SmartPass = !cfg.SmartPass;
+                SaveState();
+                RegisterAll(false);
+                SetStatus("智能放行：" + (cfg.SmartPass
+                    ? "开 —— 平时正常输入 5/6，全屏游戏或白名单程序里才当热键"
+                    : "关 —— 任何地方都当热键（打不出 5/6）"));
+            });
+            ToolStripMenuItem wl = new ToolStripMenuItem("热键白名单（窗口化游戏用）");
+            wl.DropDownItems.Add("把当前前台程序加入白名单", null, delegate { AddForegroundAppToWhitelist(); });
+            if (cfg.HotkeyApps.Count > 0)
+            {
+                wl.DropDownItems.Add(new ToolStripSeparator());
+                foreach (string app in cfg.HotkeyApps)
+                {
+                    string one = app;
+                    wl.DropDownItems.Add("移除 " + one, null, delegate
+                    {
+                        cfg.HotkeyApps.Remove(one);
+                        SaveState();
+                        SetStatus("已从白名单移除：" + one);
+                    });
+                }
+            }
+            m.Items.Add(wl);
             m.Items.Add("创建开机自启（管理员，免 UAC 提示）", null, delegate { CreateAutoStartTask(); });
             m.Items.Add("查看热键日志", null, delegate { OpenHotkeyLog(); });
+            m.Items.Add("热键诊断…", null, delegate { ShowHotkeyDiagnostics(); });
             m.Items.Add("打开配置文件", null, delegate { OpenConfig(); });
             m.Items.Add("退出", null, delegate { RealExit(); });
             m.Show(bar.PointToScreen(new Point(Math.Max(0, bar.Width - 200), bar.Height)));
@@ -811,7 +874,7 @@ namespace PinPeek
                 "【窗口】\n" +
                 "  拖工具栏移动；拖窗口四边缩放；双击工具栏最大化/还原\n" +
                 "  工具栏右侧：⋯ 设置 ｜ 📌 置顶 ｜ ⏸ 暂停 ｜ ─ 最小化 ｜ ⤢ 最大化 ｜ ✕ 退出\n" +
-                "  关掉窗口(✕) = 隐藏到托盘，托盘双击恢复；要收进任务栏请点 ─\n\n" +
+                "  关掉窗口(✕) / Alt+F4 = 彻底退出，后台不留进程；只想收起来请点 ─\n\n" +
                 "【全局热键】（游戏里也生效）\n" +
                 "  暂停/继续：" + KeyText(ACT_PAUSE) + "\n" +
                 "  快退 " + cfg.SeekSeconds + " 秒：" + KeyText(ACT_BACK) + "\n" +
@@ -864,9 +927,7 @@ namespace PinPeek
                 psi.Verb = "runas";
                 SaveState();
                 System.Diagnostics.Process.Start(psi);
-                reallyExit = true;
-                Close();
-                Application.Exit();
+                RealExit();   // 统一退出通道：先退干净自己，新进程才能拿到单实例锁
             }
             catch (Exception ex)
             {
@@ -1059,6 +1120,33 @@ namespace PinPeek
         [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string name);
         [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+        // ---- 诊断用：查前台窗口，以及它是不是以管理员身份在跑 ----
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int nMax);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr h);
+        [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr proc, uint access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(IntPtr token, int infoClass, out int info, int len, out int retLen);
+
+        // 全屏判定 / 显示器信息
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public int dwFlags;
+        }
+
         private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
 
         [StructLayout(LayoutKind.Sequential)]
@@ -1089,6 +1177,13 @@ namespace PinPeek
         private readonly List<Binding> bindings = new List<Binding>();
         private HookProc hookProc;
         private IntPtr hookHandle = IntPtr.Zero;
+        // 钩子回调里只往这个内存队列塞一行记录，写盘放到 UI 线程（文件 IO 会拖慢钩子回调，超时会被系统摘钩）
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> hookLog =
+            new System.Collections.Concurrent.ConcurrentQueue<string>();
+        private IntPtr lastHookFg = IntPtr.Zero;   // 最近一次收到热键时的前台窗口
+        private int lastHookTick = 0;
+        private System.Windows.Forms.Timer diagTimer;
+        private bool fgWarned = false;
 
         protected override void OnHandleCreated(EventArgs e)
         {
@@ -1096,6 +1191,101 @@ namespace PinPeek
             InitBindings();
             RegisterAll(true);
             InstallKeyboardHook();
+            StartDiagTimer();
+            if (!Program.IsElevated())
+                SetStatus("⚠ 当前是普通权限：前台是管理员程序时热键会失效（⋯ → 热键不灵？以管理员身份重启）");
+        }
+
+        // 每 1.5 秒做两件事：把钩子收到的事件刷进日志、检查前台程序权限是否比自己高
+        private void StartDiagTimer()
+        {
+            if (diagTimer != null) return;
+            diagTimer = new System.Windows.Forms.Timer();
+            diagTimer.Interval = 1500;
+            diagTimer.Tick += delegate { FlushHookLog(); CheckForegroundPermission(); };
+            diagTimer.Start();
+        }
+
+        private void FlushHookLog()
+        {
+            if (hookLog.IsEmpty) return;
+            string line;
+            string fgInfo = DescribeWindow(lastHookFg);
+            while (hookLog.TryDequeue(out line))
+                LogLine(line + "   前台=" + fgInfo);
+        }
+
+        // PinPeek 不是管理员、但前台程序是管理员时，Windows 的 UIPI 会让钩子收不到任何按键。
+        // 这种情况在状态栏直接提示，免得用户以为热键坏了。
+        private void CheckForegroundPermission()
+        {
+            if (Program.IsElevated())
+            {
+                if (fgWarned) { fgWarned = false; SetStatus("就绪"); }
+                return;
+            }
+            IntPtr fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero || fg == Handle) return;
+            uint pid;
+            GetWindowThreadProcessId(fg, out pid);
+            if (pid == 0 || pid == (uint)System.Diagnostics.Process.GetCurrentProcess().Id) return;
+            if (!IsPidElevated(pid)) return;
+            if (fgWarned) return;
+            fgWarned = true;
+            string info = DescribeWindow(fg);
+            SetStatus("⚠ 前台是管理员程序（" + info + "），热键收不到 → ⋯ → 热键不灵？以管理员身份重启");
+            LogLine("WARN self not elevated, foreground elevated: " + info);
+        }
+
+        private static bool IsPidElevated(uint pid)
+        {
+            if (pid == 0) return false;
+            IntPtr h = OpenProcess(0x1000, false, pid);          // PROCESS_QUERY_LIMITED_INFORMATION
+            if (h == IntPtr.Zero) return false;
+            try
+            {
+                IntPtr tok;
+                if (!OpenProcessToken(h, 0x0008, out tok)) return false;   // TOKEN_QUERY
+                try
+                {
+                    int elev, ret;
+                    if (!GetTokenInformation(tok, 20, out elev, 4, out ret)) return false;   // TokenElevation
+                    return elev != 0;
+                }
+                finally { CloseHandle(tok); }
+            }
+            finally { CloseHandle(h); }
+        }
+
+        private static string DescribeWindow(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero) return "(无)";
+            StringBuilder sb = new StringBuilder(256);
+            GetWindowText(hWnd, sb, 256);
+            uint pid;
+            GetWindowThreadProcessId(hWnd, out pid);
+            string pname = "?";
+            try { pname = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch { }
+            return pname + "「" + sb.ToString() + "」" + (IsPidElevated(pid) ? "[管理员]" : "[普通]");
+        }
+
+        private void ShowHotkeyDiagnostics()
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("是否以管理员运行：" + (Program.IsElevated() ? "是" : "否 —— 前台程序是管理员时热键会收不到"));
+            sb.AppendLine("键盘钩子：" + (hookHandle != IntPtr.Zero ? "已安装" : "未安装"));
+            foreach (Binding b in bindings)
+                sb.AppendLine("  " + b.Label + " = " + HotkeyUtil.Format(b.Mods, b.Vk) +
+                              "   注册式热键:" + (b.RegOk ? "成功" : "失败（改由钩子接管）"));
+            sb.AppendLine("最近一次收到按键：" + (lastHookTick == 0
+                ? "本次启动后还没收到过"
+                : ((Environment.TickCount - lastHookTick) / 1000) + " 秒前，当时前台=" + DescribeWindow(lastHookFg)));
+            sb.AppendLine("单键热键智能放行：" + (cfg.SmartPass ? "开（只在全屏/白名单/自己窗口里吃键）" : "关（任何地方都吃键）"));
+            sb.AppendLine("白名单：" + (cfg.HotkeyApps.Count == 0 ? "(空)" : string.Join(", ", cfg.HotkeyApps.ToArray())));
+            sb.AppendLine("当前前台算不算热键场合：" + (IsHotkeyContextActive() ? "算" : "不算（按键会正常输入）"));
+            sb.AppendLine("当前前台窗口：" + DescribeWindow(GetForegroundWindow()));
+            sb.AppendLine("日志：" + Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PinPeek", "hotkey.log"));
+            MessageBox.Show(sb.ToString(), "PinPeek 热键诊断", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void InitBindings()
@@ -1121,6 +1311,15 @@ namespace PinPeek
                 if (!HotkeyUtil.TryParse(b.Combo, out mods, out vk)) { mods = 0; vk = 0; }
                 if (b.RegOk) { UnregisterHotKey(Handle, 100 + b.Action); b.RegOk = false; }
                 b.Mods = mods; b.Vk = vk;
+                // 单键热键在「智能放行」下不能走 RegisterHotKey —— 系统级注册会无条件把数字键吞掉，
+                // 那样任何地方都打不出 5 / 6。改由低级键盘钩子处理，钩子里再判断当前是不是在打字。
+                if (mods == 0 && cfg.SmartPass)
+                {
+                    b.RegOk = false;
+                    LogLine("HOTKEY " + b.Label + " " + HotkeyUtil.Format(mods, vk) + " 钩子模式(智能放行)");
+                    sb.Append(b.Label + "=" + HotkeyUtil.Format(mods, vk) + "(智能放行)   ");
+                    continue;
+                }
                 b.RegOk = RegisterHotKey(Handle, 100 + b.Action, mods, vk);
                 LogLine("HOTKEY " + b.Label + " " + HotkeyUtil.Format(mods, vk) + " registerOk=" + b.RegOk);
                 sb.Append(b.Label + "=" + HotkeyUtil.Format(mods, vk) + (b.RegOk ? "" : "(钩子接管)") + "   ");
@@ -1165,13 +1364,17 @@ namespace PinPeek
                     foreach (Binding b in bindings)
                     {
                         if (b.Vk == 0 || kb.vkCode != b.Vk || !ModifiersMatch(b.Mods)) continue;
+                        // 单键热键：不在“游戏/全屏/白名单”场合时放行，让 5 / 6 / ~ 正常输入
+                        if (b.Mods == 0 && cfg.SmartPass && !IsHotkeyContextActive()) continue;
                         int now = Environment.TickCount;
                         if (unchecked(now - b.LastTick) > 250)
                         {
                             b.LastTick = now;
+                            lastHookTick = now;
+                            lastHookFg = GetForegroundWindow();   // 只记录句柄，不做文件 IO
+                            hookLog.Enqueue("HOOK TRIGGER " + b.Label + " " + HotkeyUtil.Format(b.Mods, b.Vk));
                             PostMessage(Handle, WM_APP_ACTION, (IntPtr)b.Action, IntPtr.Zero);
                         }
-                        LogLine("HOOK TRIGGER " + b.Label + " " + HotkeyUtil.Format(b.Mods, b.Vk));
                         return (IntPtr)1;                    // 吞掉这次按键
                     }
                 }
@@ -1181,6 +1384,8 @@ namespace PinPeek
 
         private bool ModifiersMatch(uint needMods)
         {
+            // 游戏里手常按着 Shift 冲刺 / Ctrl 蹲，多按一个修饰键不该让单键热键失效。
+            if (needMods == 0) return true;
             bool ctrl = (GetAsyncKeyState(0x11) & 0x8000) != 0;
             bool alt = (GetAsyncKeyState(0x12) & 0x8000) != 0;
             bool shift = (GetAsyncKeyState(0x10) & 0x8000) != 0;
@@ -1190,6 +1395,74 @@ namespace PinPeek
             bool needShift = (needMods & HotkeyUtil.MOD_SHIFT) != 0;
             bool needWin = (needMods & HotkeyUtil.MOD_WIN) != 0;
             return ctrl == needCtrl && alt == needAlt && shift == needShift && win == needWin;
+        }
+
+        // ---------- 单键热键的“什么时候才吃键” ----------
+        // 规则（SmartPass 开启时）：只有下面三种情况才把 5 / 6 / ~ 当热键，其余场合一律放行，正常输入。
+        //   ① 前台就是 PinPeek 自己
+        //   ② 前台窗口是「全屏」程序（绝大多数游戏都是）
+        //   ③ 前台进程名在 ini 的 hotkeyapps 白名单里（窗口化游戏用这个，菜单可一键加入）
+        // 判断都是几个轻量 Win32 调用，比读辅助功能树可靠得多。
+        private static int cachedPid = 0;
+        private static string cachedName = "";
+
+        private bool IsHotkeyContextActive()
+        {
+            if (!cfg.SmartPass) return true;          // 关掉智能放行 = 任何地方都吃键（老行为）
+            IntPtr fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return true;
+            if (fg == Handle) return true;            // 自己的窗口
+            uint pid;
+            GetWindowThreadProcessId(fg, out pid);
+            string exe = ExeNameOf(pid);
+            if (exe.Length > 0 && cfg.HotkeyApps.Contains(exe.ToLowerInvariant())) return true;
+            if (IsFullScreenWindow(fg)) return true;
+            return false;
+        }
+
+        private static string ExeNameOf(uint pid)
+        {
+            if ((int)pid == cachedPid && cachedName.Length > 0) return cachedName;
+            string n = "";
+            try { n = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant() + ".exe"; }
+            catch { }
+            cachedPid = (int)pid;
+            cachedName = n;
+            return n;
+        }
+
+        private static bool IsFullScreenWindow(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero || !IsWindowVisible(hWnd)) return false;
+            RECT r;
+            if (!GetWindowRect(hWnd, out r)) return false;
+            IntPtr mon = MonitorFromWindow(hWnd, 2);   // MONITOR_DEFAULTTONEAREST
+            MONITORINFO mi = new MONITORINFO();
+            mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+            if (!GetMonitorInfo(mon, ref mi)) return false;
+            int mw = mi.rcMonitor.Right - mi.rcMonitor.Left;
+            int mh = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
+            int ww = r.Right - r.Left, wh = r.Bottom - r.Top;
+            return ww >= mw - 4 && wh >= mh - 4;      // 覆盖整个显示器（留 4px 容差）
+        }
+
+        // 把当前前台程序加进热键白名单（窗口化游戏用）
+        private void AddForegroundAppToWhitelist()
+        {
+            IntPtr fg = GetForegroundWindow();
+            uint pid;
+            GetWindowThreadProcessId(fg, out pid);
+            string exe = ExeNameOf(pid);
+            if (exe.Length == 0) { MessageBox.Show("没认出当前前台程序。", "PinPeek"); return; }
+            if (cfg.HotkeyApps.Contains(exe))
+            {
+                MessageBox.Show(exe + " 已经在白名单里了。", "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            cfg.HotkeyApps.Add(exe);
+            SaveState();
+            MessageBox.Show("已加入热键白名单：" + exe + "\n以后这个程序在前台时，5 / 6 / ~ 会自动当热键用。",
+                "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void ChangeHotkey(int action)
@@ -1265,24 +1538,77 @@ namespace PinPeek
 
         private void RealExit()
         {
-            reallyExit = true;
-            SaveState();
-            Close();
-            Application.Exit();
+            if (exiting) return;
+            exiting = true;
+            LogLine("EXIT begin");
+            try { SaveState(); } catch { }
+
+            // 硬超时兜底：3 秒内还没退干净就强制结束进程。
+            // WebView2 偶尔会卡在关闭上（渲染进程没回应），那样光靠 Close/Application.Exit
+            // 会让进程挂在后台——这正是"点了 × 但任务管理器里还有 PinPeek"的成因。
+            System.Threading.Thread watchdog = new System.Threading.Thread(delegate ()
+            {
+                System.Threading.Thread.Sleep(3000);
+                Program.LogText("EXIT watchdog -> hard exit");
+                Environment.Exit(0);
+            });
+            watchdog.IsBackground = true;
+            watchdog.Name = "PinPeekExitWatchdog";
+            watchdog.Start();
+
+            DisposeResources();
+            try { Close(); } catch { }
+            try { Application.Exit(); } catch { }
+            Environment.Exit(0);   // 主线程直接结束，进程一定会消失
+        }
+
+        // 释放低级键盘钩子、全局热键、托盘图标、WebView2 内核；可重复调用
+        private void DisposeResources()
+        {
+            if (resourcesDisposed) return;
+            resourcesDisposed = true;
+            try { RemoveKeyboardHook(); } catch { }
+            try
+            {
+                foreach (Binding b in bindings)
+                    if (b.RegOk) { UnregisterHotKey(Handle, 100 + b.Action); b.RegOk = false; }
+            }
+            catch { }
+            try
+            {
+                if (tray != null)
+                {
+                    tray.Visible = false;
+                    tray.ContextMenuStrip = null;
+                    tray.Dispose();
+                    tray = null;
+                }
+            }
+            catch { }
+            try
+            {
+                ready = false;
+                if (web != null) web.Dispose();
+            }
+            catch { }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (!reallyExit && e.CloseReason == CloseReason.UserClosing)
+            // 任何来源的关闭都等于"退出"：工具栏 ✕、Alt+F4、任务栏右键关闭、系统关机。
+            // 不再隐藏到托盘（想收起来用 ─ 最小化，或托盘菜单里的"显示/隐藏"）。
+            if (!exiting)
             {
                 e.Cancel = true;
-                Hide();
-                SetStatus("已隐藏到托盘");
+                try
+                {
+                    if (!IsDisposed && IsHandleCreated) BeginInvoke((Action)delegate { RealExit(); });
+                    else RealExit();
+                }
+                catch { }
                 return;
             }
-            if (tray != null) { tray.Visible = false; tray.Dispose(); }
-            RemoveKeyboardHook();
-            foreach (Binding b in bindings) if (b.RegOk) { UnregisterHotKey(Handle, 100 + b.Action); b.RegOk = false; }
+            DisposeResources();
             base.OnFormClosing(e);
         }
     }
@@ -1335,9 +1661,21 @@ namespace PinPeek
 
     internal static class Program
     {
+        // 自检开关（开发用）：--selftest-exit=秒数，到点自动走一遍退出流程。
+        // 用来验证"点 ✕ 后进程是否真的消失"，含管理员权限下的情况。
+        public static int SelfTestExitSeconds = 0;
+
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
+            if (args != null)
+            {
+                foreach (string a in args)
+                {
+                    if (a != null && a.StartsWith("--selftest-exit=", StringComparison.OrdinalIgnoreCase))
+                        int.TryParse(a.Substring("--selftest-exit=".Length), out SelfTestExitSeconds);
+                }
+            }
             try { Run(); }
             catch (Exception ex)
             {
@@ -1370,9 +1708,20 @@ namespace PinPeek
                 LogText("START elevated=True");
             }
 
-            // 单实例：避免多个窗口抢同一个热键，导致“有时灵有时不灵”
-            bool created;
-            System.Threading.Mutex mutex = new System.Threading.Mutex(true, "PinPeek.SingleInstance.v1", out created);
+            // 单实例：避免多个窗口抢同一个热键，导致“有时灵有时不灵”。
+            // 退出后立刻重启（菜单里的“以管理员身份重启”）时，旧进程松锁要一点时间，所以重试几秒。
+            bool created = false;
+            System.Threading.Mutex mutex = null;
+            for (int i = 0; i < 30 && !created; i++)
+            {
+                mutex = new System.Threading.Mutex(true, "PinPeek.SingleInstance.v1", out created);
+                if (!created)
+                {
+                    mutex.Dispose();
+                    mutex = null;
+                    System.Threading.Thread.Sleep(200);
+                }
+            }
             if (!created)
             {
                 MessageBox.Show("PinPeek 已经在运行了。\n请到任务栏 / 托盘图标那里找回它，不要重复启动。",
@@ -1392,6 +1741,8 @@ namespace PinPeek
                 catch { }
             };
             Application.Run(new MainForm(cfg, cfgFile));
+            Program.LogText("EXIT message loop returned");
+            Environment.Exit(0);   // 兜底：消息循环结束后进程必须消失，不留后台残留
         }
 
         public static bool IsElevated()
@@ -1412,6 +1763,15 @@ namespace PinPeek
                 System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo();
                 psi.FileName = Application.ExecutablePath;
                 psi.WorkingDirectory = Path.GetDirectoryName(Application.ExecutablePath);
+                // 命令行参数一并带过去，免得提权后丢掉（如 --selftest-exit=）
+                string[] rawArgs = Environment.GetCommandLineArgs();
+                StringBuilder argSb = new StringBuilder();
+                for (int i = 1; i < rawArgs.Length; i++)
+                {
+                    if (argSb.Length > 0) argSb.Append(' ');
+                    argSb.Append('"').Append(rawArgs[i]).Append('"');
+                }
+                psi.Arguments = argSb.ToString();
                 psi.UseShellExecute = true;
                 psi.Verb = "runas";
                 System.Diagnostics.Process.Start(psi);
