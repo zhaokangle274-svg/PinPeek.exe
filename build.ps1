@@ -71,8 +71,11 @@ Copy-Item (Join-Path $netDir 'Microsoft.Web.WebView2.Core.dll') $outDir -Force
 Copy-Item (Join-Path $netDir 'Microsoft.Web.WebView2.WinForms.dll') $outDir -Force
 Copy-Item $loader $outDir -Force
 foreach ($f in @('使用说明.txt', 'enable_autostart_admin.bat', 'disable_autostart_admin.bat')) {
-    $p = Join-Path $root $f
-    if (Test-Path $p) { Copy-Item $p $outDir -Force }
+    # 说明文档放在 docs/ 下，根目录也可能有同名文件，两处都找
+    foreach ($dir in @($root, (Join-Path $root 'docs'))) {
+        $p = Join-Path $dir $f
+        if (Test-Path $p) { Copy-Item $p $outDir -Force; break }
+    }
 }
 
 Write-Host "`n构建完成：$outDir" -ForegroundColor Green
