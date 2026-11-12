@@ -32,7 +32,8 @@ namespace PinPeek
         public int SeekSeconds = 5;         // 每次快进/快退的秒数
         public bool AutoElevate = true;  // 启动时自动请求管理员权限（游戏是全屏/管理员时热键才收得到）
         public bool SmartPass = true;    // 智能放行：单键热键只在全屏程序 / 白名单程序 / 自己窗口里才吃键
-        public List<string> HotkeyApps = new List<string>();   // 热键白名单（窗口化游戏用），存小写 exe 名
+        public List<string> HotkeyApps = new List<string>();   // 【强制当热键】名单（纠正被误判的游戏），小写 exe 名
+        public List<string> TypingApps = new List<string>();   // 【打字程序】名单：在里面打字时 5/6/~ 不吃键
         public List<string[]> Bookmarks = new List<string[]>();
         private string path;
 
@@ -41,7 +42,8 @@ namespace PinPeek
             Config c = new Config();
             c.path = p;
             // 默认收藏只在配置文件里没有 [bookmark] 时才补，避免每启动一次就重复叠加一批
-            if (!File.Exists(p)) { AddDefaultBookmarks(c); return c; }
+            if (!File.Exists(p)) { AddDefaultBookmarks(c); AddDefaultTypingApps(c); return c; }
+            bool typingKeySeen = false;
             try
             {
                 string section = "";
@@ -93,11 +95,21 @@ namespace PinPeek
                                 if (!c.HotkeyApps.Contains(e)) c.HotkeyApps.Add(e);
                             }
                             break;
+                        case "typingapps":
+                            typingKeySeen = true;
+                            foreach (string one in v.Split(new char[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries))
+                            {
+                                string e = one.Trim().ToLowerInvariant();
+                                if (!e.EndsWith(".exe")) e += ".exe";
+                                if (!c.TypingApps.Contains(e)) c.TypingApps.Add(e);
+                            }
+                            break;
                     }
                 }
             }
             catch { }
             if (c.Bookmarks.Count == 0) AddDefaultBookmarks(c);
+            if (!typingKeySeen && c.TypingApps.Count == 0) AddDefaultTypingApps(c);
             if (c.OpacityPercent < 30) c.OpacityPercent = 30;
             if (c.OpacityPercent > 100) c.OpacityPercent = 100;
             if (c.ZoomPercent < 30) c.ZoomPercent = 30;
@@ -111,6 +123,26 @@ namespace PinPeek
             c.Bookmarks.Add(new string[] { "B站搜索", "https://search.bilibili.com" });
             c.Bookmarks.Add(new string[] { "米游社", "https://www.miyoushe.com" });
             c.Bookmarks.Add(new string[] { "抖音", "https://www.douyin.com" });
+        }
+
+        // 默认的「打字程序」：在这些程序里 5 / 6 / ~ 正常输入，不当热键。
+        // 游戏（无论全屏还是窗口化）不在这里面，所以照常当热键。
+        private static readonly string[] DefaultTypingApps = new string[]
+        {
+            "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe", "360se.exe", "360chrome.exe", "sogouexplorer.exe",
+            "wechat.exe", "weixin.exe", "qq.exe", "qqnt.exe", "tim.exe", "dingtalk.exe", "wework.exe", "feishu.exe", "telegram.exe", "discord.exe", "slack.exe", "teams.exe", "ms-teams.exe",
+            "winword.exe", "excel.exe", "powerpnt.exe", "wps.exe", "et.exe", "wpp.exe", "onenote.exe",
+            "notepad.exe", "notepad++.exe", "sublime_text.exe", "code.exe", "devenv.exe", "idea64.exe", "pycharm64.exe", "gvim.exe",
+            "typora.exe", "obsidian.exe", "notion.exe", "xnviewmp.exe",
+            // 注意：不要放 explorer.exe —— 桌面（Program Manager）也算 explorer，放进来会导致桌面上热键失效。
+            // 资源管理器地址栏输入靠“焦点有文本光标”那条规则兜住。
+            "mstsc.exe", "putty.exe", "xshell.exe", "windowsterminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe"
+        };
+
+        private static void AddDefaultTypingApps(Config c)
+        {
+            foreach (string e in DefaultTypingApps)
+                if (!c.TypingApps.Contains(e)) c.TypingApps.Add(e);
         }
 
         private static int Int(string s, int d) { int r; return int.TryParse(s, out r) ? r : d; }
@@ -142,6 +174,7 @@ namespace PinPeek
                 sb.AppendLine("autoelevate=" + (AutoElevate ? "1" : "0"));
                 sb.AppendLine("smartpass=" + (SmartPass ? "1" : "0"));
                 sb.AppendLine("hotkeyapps=" + string.Join(",", HotkeyApps.ToArray()));
+                sb.AppendLine("typingapps=" + string.Join(",", TypingApps.ToArray()));
                 sb.AppendLine();
                 sb.AppendLine("[bookmark]");
                 foreach (string[] b in Bookmarks) sb.AppendLine(b[0] + "=" + b[0] + "|" + b[1]);
@@ -834,28 +867,45 @@ namespace PinPeek
                 SaveState();
                 SetStatus("启动时自动提权：" + (cfg.AutoElevate ? "开（下次启动生效）" : "关"));
             });
-            m.Items.Add("单键热键智能放行（只在游戏/全屏时吃键）：" + (cfg.SmartPass ? "开" : "关"), null, delegate
+            m.Items.Add("单键热键智能放行（打字时不抢键）：" + (cfg.SmartPass ? "开" : "关"), null, delegate
             {
                 cfg.SmartPass = !cfg.SmartPass;
                 SaveState();
                 RegisterAll(false);
                 SetStatus("智能放行：" + (cfg.SmartPass
-                    ? "开 —— 平时正常输入 5/6，全屏游戏或白名单程序里才当热键"
-                    : "关 —— 任何地方都当热键（打不出 5/6）"));
+                    ? "开 —— 游戏里当热键，浏览器/聊天/办公软件里正常输入 5 6 ~"
+                    : "关 —— 完全原版行为：任何程序里都当热键（打不出 5 6 ~）"));
             });
-            ToolStripMenuItem wl = new ToolStripMenuItem("热键白名单（窗口化游戏用）");
-            wl.DropDownItems.Add("把当前前台程序加入白名单", null, delegate { AddForegroundAppToWhitelist(); });
+            ToolStripMenuItem tl = new ToolStripMenuItem("打字程序名单（在这里面不抢按键）");
+            tl.DropDownItems.Add("把当前前台程序加入", null, delegate { AddForegroundAppToTypingList(); });
+            if (cfg.TypingApps.Count > 0)
+            {
+                tl.DropDownItems.Add(new ToolStripSeparator());
+                foreach (string app in cfg.TypingApps.ToArray())
+                {
+                    string one = app;
+                    tl.DropDownItems.Add("移除 " + one, null, delegate
+                    {
+                        cfg.TypingApps.Remove(one);
+                        SaveState();
+                        SetStatus("已从打字程序名单移除：" + one);
+                    });
+                }
+            }
+            m.Items.Add(tl);
+            ToolStripMenuItem wl = new ToolStripMenuItem("强制当热键名单（游戏被误判时用）");
+            wl.DropDownItems.Add("把当前前台程序加入", null, delegate { AddForegroundAppToWhitelist(); });
             if (cfg.HotkeyApps.Count > 0)
             {
                 wl.DropDownItems.Add(new ToolStripSeparator());
-                foreach (string app in cfg.HotkeyApps)
+                foreach (string app in cfg.HotkeyApps.ToArray())
                 {
                     string one = app;
                     wl.DropDownItems.Add("移除 " + one, null, delegate
                     {
                         cfg.HotkeyApps.Remove(one);
                         SaveState();
-                        SetStatus("已从白名单移除：" + one);
+                        SetStatus("已从强制当热键名单移除：" + one);
                     });
                 }
             }
@@ -1147,6 +1197,23 @@ namespace PinPeek
             public int dwFlags;
         }
 
+        // 前台线程的键盘焦点信息（用来判断焦点是不是在输入框里：hwndCaret 非零 = 有文本光标）
+        [DllImport("user32.dll")] private static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO pgui);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct GUITHREADINFO
+        {
+            public int cbSize;
+            public int flags;
+            public IntPtr hwndActive;
+            public IntPtr hwndFocus;
+            public IntPtr hwndCapture;
+            public IntPtr hwndMenuOwner;
+            public IntPtr hwndMoveSize;
+            public IntPtr hwndCaret;
+            public int rcCaretLeft, rcCaretTop, rcCaretRight, rcCaretBottom;
+        }
+
         private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
 
         [StructLayout(LayoutKind.Sequential)]
@@ -1182,6 +1249,7 @@ namespace PinPeek
             new System.Collections.Concurrent.ConcurrentQueue<string>();
         private IntPtr lastHookFg = IntPtr.Zero;   // 最近一次收到热键时的前台窗口
         private int lastHookTick = 0;
+        private int lastPassTick = 0;              // 上一次“放行”日志的时间（限流用）
         private System.Windows.Forms.Timer diagTimer;
         private bool fgWarned = false;
 
@@ -1280,9 +1348,12 @@ namespace PinPeek
             sb.AppendLine("最近一次收到按键：" + (lastHookTick == 0
                 ? "本次启动后还没收到过"
                 : ((Environment.TickCount - lastHookTick) / 1000) + " 秒前，当时前台=" + DescribeWindow(lastHookFg)));
-            sb.AppendLine("单键热键智能放行：" + (cfg.SmartPass ? "开（只在全屏/白名单/自己窗口里吃键）" : "关（任何地方都吃键）"));
-            sb.AppendLine("白名单：" + (cfg.HotkeyApps.Count == 0 ? "(空)" : string.Join(", ", cfg.HotkeyApps.ToArray())));
-            sb.AppendLine("当前前台算不算热键场合：" + (IsHotkeyContextActive() ? "算" : "不算（按键会正常输入）"));
+            sb.AppendLine("单键热键智能放行：" + (cfg.SmartPass ? "开" : "关（任何程序里都吃键）"));
+            sb.AppendLine("强制当热键名单：" + (cfg.HotkeyApps.Count == 0 ? "(空)" : string.Join(", ", cfg.HotkeyApps.ToArray())));
+            sb.AppendLine("打字程序名单：" + cfg.TypingApps.Count + " 项" + (cfg.TypingApps.Count == 0 ? "" : "（" + string.Join(", ", cfg.TypingApps.ToArray()) + "）"));
+            string why;
+            bool active = IsHotkeyContextActive(out why);
+            sb.AppendLine("当前前台算不算热键场合：" + (active ? "算 —— 按键会被吃掉" : "不算 —— 按键会正常输入") + "（" + why + "）");
             sb.AppendLine("当前前台窗口：" + DescribeWindow(GetForegroundWindow()));
             sb.AppendLine("日志：" + Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PinPeek", "hotkey.log"));
             MessageBox.Show(sb.ToString(), "PinPeek 热键诊断", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1364,8 +1435,22 @@ namespace PinPeek
                     foreach (Binding b in bindings)
                     {
                         if (b.Vk == 0 || kb.vkCode != b.Vk || !ModifiersMatch(b.Mods)) continue;
-                        // 单键热键：不在“游戏/全屏/白名单”场合时放行，让 5 / 6 / ~ 正常输入
-                        if (b.Mods == 0 && cfg.SmartPass && !IsHotkeyContextActive()) continue;
+                        // 单键热键：只有“明确在打字”时放行，其余（游戏/桌面/未知程序）一律当热键
+                        if (b.Mods == 0 && cfg.SmartPass)
+                        {
+                            string passReason;
+                            if (!IsHotkeyContextActive(out passReason))
+                            {
+                                int passed = Environment.TickCount;
+                                if (unchecked(passed - lastPassTick) > 1000)   // 放行日志每秒最多一条，避免刷屏
+                                {
+                                    lastPassTick = passed;
+                                    lastHookFg = GetForegroundWindow();
+                                    hookLog.Enqueue("PASS " + b.Label + " " + HotkeyUtil.Format(b.Mods, b.Vk) + " 原因=" + passReason);
+                                }
+                                continue;
+                            }
+                        }
                         int now = Environment.TickCount;
                         if (unchecked(now - b.LastTick) > 250)
                         {
@@ -1398,26 +1483,51 @@ namespace PinPeek
         }
 
         // ---------- 单键热键的“什么时候才吃键” ----------
-        // 规则（SmartPass 开启时）：只有下面三种情况才把 5 / 6 / ~ 当热键，其余场合一律放行，正常输入。
-        //   ① 前台就是 PinPeek 自己
-        //   ② 前台窗口是「全屏」程序（绝大多数游戏都是）
-        //   ③ 前台进程名在 ini 的 hotkeyapps 白名单里（窗口化游戏用这个，菜单可一键加入）
-        // 判断都是几个轻量 Win32 调用，比读辅助功能树可靠得多。
+        // 默认（SmartPass 开启）几乎等于原版行为：任何程序里都当热键，只有下面几种情况才放行让按键正常输入——
+        //   ① 前台进程在【打字程序名单】里（浏览器 / QQ / 微信 / Office / 编辑器 …）
+        //   ② 前台窗口的焦点控件有文本光标（GetGUIThreadInfo 的 hwndCaret 非零，说明正在某个输入框里）
+        // 游戏（无论全屏还是窗口化）、桌面、未知程序一律当热键 —— 上一版“只有全屏才吃键”会把窗口化游戏挡掉。
+        // 【强制当热键名单】优先级最高，用来纠正被误判成打字程序的游戏。
         private static int cachedPid = 0;
         private static string cachedName = "";
 
         private bool IsHotkeyContextActive()
         {
-            if (!cfg.SmartPass) return true;          // 关掉智能放行 = 任何地方都吃键（老行为）
+            string dummy;
+            return IsHotkeyContextActive(out dummy);
+        }
+
+        private bool IsHotkeyContextActive(out string reason)
+        {
+            reason = "";
+            if (!cfg.SmartPass) { reason = "智能放行已关"; return true; }
             IntPtr fg = GetForegroundWindow();
-            if (fg == IntPtr.Zero) return true;
-            if (fg == Handle) return true;            // 自己的窗口
+            if (fg == IntPtr.Zero) { reason = "无前台"; return true; }
+            if (fg == Handle) { reason = "自己窗口"; return true; }
             uint pid;
             GetWindowThreadProcessId(fg, out pid);
             string exe = ExeNameOf(pid);
-            if (exe.Length > 0 && cfg.HotkeyApps.Contains(exe.ToLowerInvariant())) return true;
-            if (IsFullScreenWindow(fg)) return true;
-            return false;
+            if (exe.Length > 0 && cfg.HotkeyApps.Contains(exe)) { reason = "强制热键名单"; return true; }
+            if (exe.Length > 0 && cfg.TypingApps.Contains(exe)) { reason = "打字程序 " + exe; return false; }
+            if (HasTextCaret(pid)) { reason = "焦点有文本光标"; return false; }
+            reason = "默认当热键";
+            return true;
+        }
+
+        // 前台线程的键盘焦点控件是否有光标（有光标基本等于“正在某个输入框里”）
+        private static bool HasTextCaret(uint foregroundPid)
+        {
+            try
+            {
+                IntPtr fg = GetForegroundWindow();
+                uint pid;
+                uint tid = GetWindowThreadProcessId(fg, out pid);
+                GUITHREADINFO gti = new GUITHREADINFO();
+                gti.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+                if (!GetGUIThreadInfo(tid, ref gti)) return false;
+                return gti.hwndCaret != IntPtr.Zero;
+            }
+            catch { return false; }
         }
 
         private static string ExeNameOf(uint pid)
@@ -1446,7 +1556,7 @@ namespace PinPeek
             return ww >= mw - 4 && wh >= mh - 4;      // 覆盖整个显示器（留 4px 容差）
         }
 
-        // 把当前前台程序加进热键白名单（窗口化游戏用）
+        // 把当前前台程序加进【强制当热键】名单（个别游戏被误判成打字程序时用）
         private void AddForegroundAppToWhitelist()
         {
             IntPtr fg = GetForegroundWindow();
@@ -1454,14 +1564,36 @@ namespace PinPeek
             GetWindowThreadProcessId(fg, out pid);
             string exe = ExeNameOf(pid);
             if (exe.Length == 0) { MessageBox.Show("没认出当前前台程序。", "PinPeek"); return; }
+            cfg.TypingApps.Remove(exe);
             if (cfg.HotkeyApps.Contains(exe))
             {
-                MessageBox.Show(exe + " 已经在白名单里了。", "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(exe + " 已经在【强制当热键】名单里了。", "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             cfg.HotkeyApps.Add(exe);
             SaveState();
-            MessageBox.Show("已加入热键白名单：" + exe + "\n以后这个程序在前台时，5 / 6 / ~ 会自动当热键用。",
+            SaveState();
+            MessageBox.Show("已加入【强制当热键】：" + exe + "\n以后这个程序在前台时，5 / 6 / ~ 一定会当热键用。",
+                "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        // 把当前前台程序加进【打字程序】名单（在里面打字时不抢键）
+        private void AddForegroundAppToTypingList()
+        {
+            IntPtr fg = GetForegroundWindow();
+            uint pid;
+            GetWindowThreadProcessId(fg, out pid);
+            string exe = ExeNameOf(pid);
+            if (exe.Length == 0) { MessageBox.Show("没认出当前前台程序。", "PinPeek"); return; }
+            cfg.HotkeyApps.Remove(exe);
+            if (cfg.TypingApps.Contains(exe))
+            {
+                MessageBox.Show(exe + " 已经在【打字程序】名单里了。", "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            cfg.TypingApps.Add(exe);
+            SaveState();
+            MessageBox.Show("已加入【打字程序】：" + exe + "\n在这个程序里打字时，5 / 6 / ~ 会正常输入、不当热键。",
                 "PinPeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
