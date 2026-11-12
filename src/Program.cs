@@ -29,6 +29,7 @@ namespace PinPeek
         public string PauseHotkey = "~";    // 暂停/继续
         public string BackHotkey = "5";     // 快退
         public string ForwardHotkey = "6";  // 快进
+        public string TypeModeHotkey = "Ctrl+Shift+F9";  // 打字模式开关（临时让单键恢复打字）
         public int SeekSeconds = 5;         // 每次快进/快退的秒数
         public bool AutoElevate = true;  // 启动时自动请求管理员权限（游戏是全屏/管理员时热键才收得到）
         public bool SmartPass = true;    // 智能放行：单键热键只在全屏程序 / 白名单程序 / 自己窗口里才吃键
@@ -84,6 +85,7 @@ namespace PinPeek
                         case "pausehotkey": c.PauseHotkey = v; break;
                         case "backhotkey": c.BackHotkey = v; break;
                         case "forwardhotkey": c.ForwardHotkey = v; break;
+                        case "typemodehotkey": c.TypeModeHotkey = v; break;
                         case "seekseconds": c.SeekSeconds = Math.Max(1, Int(v, c.SeekSeconds)); break;
                         case "autoelevate": c.AutoElevate = B(v); break;
                         case "smartpass": c.SmartPass = B(v); break;
@@ -170,6 +172,7 @@ namespace PinPeek
                 sb.AppendLine("pausehotkey=" + PauseHotkey);
                 sb.AppendLine("backhotkey=" + BackHotkey);
                 sb.AppendLine("forwardhotkey=" + ForwardHotkey);
+                sb.AppendLine("typemodehotkey=" + TypeModeHotkey);
                 sb.AppendLine("seekseconds=" + SeekSeconds);
                 sb.AppendLine("autoelevate=" + (AutoElevate ? "1" : "0"));
                 sb.AppendLine("smartpass=" + (SmartPass ? "1" : "0"));
@@ -363,6 +366,8 @@ namespace PinPeek
         private bool exiting = false;            // 已经进入退出流程（防重入）
         private bool resourcesDisposed = false;  // 钩子/热键/托盘/浏览器内核已释放
         private bool videoPaused = false;
+        private bool typeMode = false;          // 打字模式：临时让 5/6/~ 恢复打字
+        private int typeModeSince = 0;          // 进入/使用打字模式的时间（闲置自动退出用）
 
         public MainForm(Config c, string cfgFile)
         {
@@ -465,6 +470,7 @@ namespace PinPeek
             tray.Visible = true;
             ContextMenuStrip tm = new ContextMenuStrip();
             tm.Items.Add("显示/隐藏", null, delegate { ToggleVisible(); });
+            tm.Items.Add("打字模式（5/6/~ 正常输入）", null, delegate { ToggleTypeMode(); });
             tm.Items.Add("置顶开关", null, delegate { ToggleTopMost(); });
             tm.Items.Add("退出", null, delegate { RealExit(); });
             tray.ContextMenuStrip = tm;
@@ -818,6 +824,7 @@ namespace PinPeek
             }
             m.Items.Add(op);
             m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("打字模式：" + (typeMode ? "开（5/6/~ 正常输入）" : "关（5/6/~ 当热键）"), null, delegate { ToggleTypeMode(); });
             m.Items.Add("暂停 / 继续 视频", null, delegate { TogglePauseVideo(); });
             Binding bk = FindBinding(ACT_BACK), fk = FindBinding(ACT_FWD);
             m.Items.Add("快退 " + cfg.SeekSeconds + " 秒", null, delegate { SeekVideo(-cfg.SeekSeconds); });
@@ -826,6 +833,7 @@ namespace PinPeek
             hkMenu.DropDownItems.Add("暂停/继续：" + KeyText(ACT_PAUSE), null, delegate { ChangeHotkey(ACT_PAUSE); });
             hkMenu.DropDownItems.Add("快退：" + KeyText(ACT_BACK), null, delegate { ChangeHotkey(ACT_BACK); });
             hkMenu.DropDownItems.Add("快进：" + KeyText(ACT_FWD), null, delegate { ChangeHotkey(ACT_FWD); });
+            hkMenu.DropDownItems.Add("打字模式开关：" + KeyText(ACT_TYPEMODE), null, delegate { ChangeHotkey(ACT_TYPEMODE); });
             m.Items.Add(hkMenu);
             m.Items.Add("最小化到任务栏", null, delegate { MinimizeToTaskbar(); });
             m.Items.Add(new ToolStripSeparator());
@@ -1229,7 +1237,7 @@ namespace PinPeek
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_HOTKEY = 0x0312;
         private const int WM_APP_ACTION = 0x8001;   // 钩子线程 → UI 线程
-        private const int ACT_PAUSE = 1, ACT_BACK = 2, ACT_FWD = 3;
+        private const int ACT_PAUSE = 1, ACT_BACK = 2, ACT_FWD = 3, ACT_TYPEMODE = 4;
 
         private class Binding
         {
@@ -1270,7 +1278,7 @@ namespace PinPeek
             if (diagTimer != null) return;
             diagTimer = new System.Windows.Forms.Timer();
             diagTimer.Interval = 1500;
-            diagTimer.Tick += delegate { FlushHookLog(); CheckForegroundPermission(); };
+            diagTimer.Tick += delegate { FlushHookLog(); CheckForegroundPermission(); CheckTypeModeTimeout(); };
             diagTimer.Start();
         }
 
@@ -1280,7 +1288,21 @@ namespace PinPeek
             string line;
             string fgInfo = DescribeWindow(lastHookFg);
             while (hookLog.TryDequeue(out line))
-                LogLine(line + "   前台=" + fgInfo);
+                LogLineRaw(line + "   前台=" + fgInfo);
+        }
+
+        // 钩子里的事件已经自带发生时刻，这里不要再补刷盘时间，否则顺序会失真
+        private void LogLineRaw(string s)
+        {
+            try
+            {
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PinPeek");
+                Directory.CreateDirectory(dir);
+                string f = Path.Combine(dir, "hotkey.log");
+                if (File.Exists(f) && new FileInfo(f).Length > 300 * 1024) File.Delete(f);
+                File.AppendAllText(f, s + "\r\n", Encoding.UTF8);
+            }
+            catch { }
         }
 
         // PinPeek 不是管理员、但前台程序是管理员时，Windows 的 UIPI 会让钩子收不到任何按键。
@@ -1365,6 +1387,7 @@ namespace PinPeek
             bindings.Add(new Binding { Action = ACT_PAUSE, Label = "暂停/继续", Combo = cfg.PauseHotkey });
             bindings.Add(new Binding { Action = ACT_BACK, Label = "快退", Combo = cfg.BackHotkey });
             bindings.Add(new Binding { Action = ACT_FWD, Label = "快进", Combo = cfg.ForwardHotkey });
+            bindings.Add(new Binding { Action = ACT_TYPEMODE, Label = "打字模式开关", Combo = cfg.TypeModeHotkey });
         }
 
         private Binding FindBinding(int action)
@@ -1405,6 +1428,7 @@ namespace PinPeek
                 case ACT_PAUSE: TogglePauseVideo(); break;
                 case ACT_BACK: SeekVideo(-cfg.SeekSeconds); break;
                 case ACT_FWD: SeekVideo(cfg.SeekSeconds); break;
+                case ACT_TYPEMODE: ToggleTypeMode(); break;
             }
         }
 
@@ -1431,6 +1455,7 @@ namespace PinPeek
                 int msg = wParam.ToInt32();
                 if (msg == 0x0100 || msg == 0x0104)          // WM_KEYDOWN / WM_SYSKEYDOWN
                 {
+                    if (typeMode) typeModeSince = Environment.TickCount;   // 打字期间有任何按键就续期，别中途把热键抢回来
                     KBDLLHOOKSTRUCT kb = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
                     foreach (Binding b in bindings)
                     {
@@ -1446,7 +1471,7 @@ namespace PinPeek
                                 {
                                     lastPassTick = passed;
                                     lastHookFg = GetForegroundWindow();
-                                    hookLog.Enqueue("PASS " + b.Label + " " + HotkeyUtil.Format(b.Mods, b.Vk) + " 原因=" + passReason);
+                                    hookLog.Enqueue(DateTime.Now.ToString("HH:mm:ss.fff") + "  PASS " + b.Label + " " + HotkeyUtil.Format(b.Mods, b.Vk) + " 原因=" + passReason);
                                 }
                                 continue;
                             }
@@ -1457,7 +1482,7 @@ namespace PinPeek
                             b.LastTick = now;
                             lastHookTick = now;
                             lastHookFg = GetForegroundWindow();   // 只记录句柄，不做文件 IO
-                            hookLog.Enqueue("HOOK TRIGGER " + b.Label + " " + HotkeyUtil.Format(b.Mods, b.Vk));
+                            hookLog.Enqueue(DateTime.Now.ToString("HH:mm:ss.fff") + "  HOOK TRIGGER " + b.Label + " " + HotkeyUtil.Format(b.Mods, b.Vk));
                             PostMessage(Handle, WM_APP_ACTION, (IntPtr)b.Action, IntPtr.Zero);
                         }
                         return (IntPtr)1;                    // 吞掉这次按键
@@ -1500,6 +1525,7 @@ namespace PinPeek
         private bool IsHotkeyContextActive(out string reason)
         {
             reason = "";
+            if (typeMode) { typeModeSince = Environment.TickCount; reason = "打字模式已开"; return false; }
             if (!cfg.SmartPass) { reason = "智能放行已关"; return true; }
             IntPtr fg = GetForegroundWindow();
             if (fg == IntPtr.Zero) { reason = "无前台"; return true; }
@@ -1554,6 +1580,51 @@ namespace PinPeek
             int mh = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
             int ww = r.Right - r.Left, wh = r.Bottom - r.Top;
             return ww >= mw - 4 && wh >= mh - 4;      // 覆盖整个显示器（留 4px 容差）
+        }
+
+        // ---------- 打字模式：临时把 5/6/~ 还给键盘 ----------
+        // 游戏里总得能打字（聊天、昵称、搜索）。同一个窗口里单键既是热键又是字符，只能靠一个开关区分：
+        // 按下开关（默认 Ctrl+Shift+F9）后 90 秒内单键一律正常输入，超过 90 秒没再按就自动恢复热键。
+        private void ToggleTypeMode()
+        {
+            SetTypeMode(!typeMode);
+        }
+
+        private void SetTypeMode(bool on)
+        {
+            typeMode = on;
+            typeModeSince = Environment.TickCount;
+            if (on)
+            {
+                SetStatus("✎ 打字模式：5 / 6 / ~ 现在正常输入（按 " + KeyText(ACT_TYPEMODE) + " 或菜单切回；90 秒没按键自动恢复）");
+                ShowTrayBalloon("已进入打字模式", "5 / 6 / ~ 现在正常输入，90 秒后自动恢复热键。");
+                LogLine("TYPEMODE on");
+            }
+            else
+            {
+                SetStatus("热键已恢复：5 / 6 / ~ 重新当热键");
+                ShowTrayBalloon("打字模式已关闭", "5 / 6 / ~ 重新当热键用。");
+                LogLine("TYPEMODE off");
+            }
+        }
+
+        private void ShowTrayBalloon(string title, string text)
+        {
+            try
+            {
+                if (tray != null) tray.ShowBalloonTip(2000, title, text, ToolTipIcon.Info);
+            }
+            catch { }
+        }
+
+        // 打字模式闲置超时自动恢复（在 1.5 秒的定时器里检查）
+        private void CheckTypeModeTimeout()
+        {
+            if (!typeMode) return;
+            if (unchecked(Environment.TickCount - typeModeSince) < 90000) return;
+            typeMode = false;
+            SetStatus("打字模式已自动结束（90 秒没按键）：5 / 6 / ~ 重新当热键");
+            LogLine("TYPEMODE auto-off");
         }
 
         // 把当前前台程序加进【强制当热键】名单（个别游戏被误判成打字程序时用）
@@ -1616,6 +1687,7 @@ namespace PinPeek
             target.Combo = HotkeyUtil.Format(f.Mods, f.Vk);
             if (action == ACT_PAUSE) cfg.PauseHotkey = target.Combo;
             else if (action == ACT_BACK) cfg.BackHotkey = target.Combo;
+            else if (action == ACT_TYPEMODE) cfg.TypeModeHotkey = target.Combo;
             else cfg.ForwardHotkey = target.Combo;
             RegisterAll(false);
             SaveState();
